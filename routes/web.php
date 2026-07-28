@@ -1,0 +1,181 @@
+<?php
+
+use App\Http\Controllers\ApiTokenController;
+use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\BrandingController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\FaviconController;
+use App\Http\Controllers\PasswordController;
+use App\Http\Controllers\AllowBlockController;
+use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\MailDomainController;
+use App\Http\Controllers\MailLogController;
+use App\Http\Controllers\MailRecipientController;
+use App\Http\Controllers\NodeController;
+use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\QuarantineController;
+use App\Http\Controllers\SetupController;
+use App\Http\Controllers\SpamPolicyController;
+use App\Http\Controllers\FirewallController;
+use App\Http\Controllers\HostSslController;
+use App\Http\Controllers\GeneralSettingsController;
+use App\Http\Controllers\TwoFactorController;
+use App\Http\Controllers\AuditLogController;
+use App\Http\Controllers\UserController;
+use Illuminate\Support\Facades\Route;
+
+// First-run setup wizard. Not behind 'auth': step 1 (create admin) runs as a
+// guest, step 2 (license) runs authed. Access is governed by EnsureSetup.
+Route::prefix('setup')->group(function () {
+    Route::get('/', [SetupController::class, 'index'])->name('setup.index');
+    Route::post('/admin', [SetupController::class, 'storeAdmin'])->name('setup.admin');
+    Route::post('/license', [SetupController::class, 'storeLicense'])->name('setup.license');
+});
+
+// Guest (unauthenticated) routes.
+Route::middleware('guest')->group(function () {
+    Route::get('/login', [AuthController::class, 'show'])->name('login');
+    Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+
+    // One-click test sign-in, restricted to the IPs in the dev_login_ips setting.
+    // 404s (not 403) for anyone else, so its existence is not advertised.
+    Route::post('/dev-login', [AuthController::class, 'devLogin'])
+        ->middleware('throttle:10,1')->name('dev-login');
+});
+
+// One-click signed magic-login link (short-lived; the signature is the credential).
+Route::get('/magic/{user}', [AuthController::class, 'magic'])->name('magic-login')->middleware('signed');
+
+// Two-factor challenge (after password, before full login - user not yet authed).
+Route::get('/2fa', [AuthController::class, 'challenge'])->name('2fa.challenge');
+Route::post('/2fa', [AuthController::class, 'challengeVerify'])->middleware('throttle:10,1');
+
+Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth')->name('logout');
+
+// Brand favicon, accent-tinted from DB-driven branding (public - browsers fetch it pre-login).
+// Extension-less on purpose: CloudPanel nginx serves *.svg/*.png as static files
+// and 404s before reaching PHP. The <link type="…"> attribute sets the MIME.
+Route::get('/brand/favicon', [FaviconController::class, 'svg'])->name('favicon.svg');
+Route::get('/brand/favicon-png', [FaviconController::class, 'faviconPng'])->name('favicon.png');
+Route::get('/brand/favicon-apple', [FaviconController::class, 'appleIcon'])->name('favicon.apple');
+
+// Public documentation (installer, agents, connectors, repositories, updates).
+Route::view('/docs', 'docs')->name('docs');
+
+// One control panel for the whole fleet, behind auth.
+Route::middleware(['auth', 'security.policy'])->group(function () {
+    Route::get('/', DashboardController::class)->name('dashboard');
+
+    // Design galleries (ScriptGain navbar/footer pickers) - self-contained pages.
+    Route::view('/ui/navbars', 'ui.navbars')->name('ui.navbars');
+    Route::view('/ui/footers', 'ui.footers')->name('ui.footers');
+
+    // Customers - who the operator filters for. Portal users hang off these.
+    Route::resource('customers', CustomerController::class)->only(['index', 'create', 'store', 'show', 'edit', 'update', 'destroy']);
+
+    // Filtered domains + their mailboxes.
+    Route::resource('domains', MailDomainController::class)->only(['index', 'create', 'store', 'show', 'edit', 'update', 'destroy']);
+    Route::post('domains/{domain}/verify', [MailDomainController::class, 'verify'])->name('domains.verify');
+    Route::post('domains/{domain}/check-mx', [MailDomainController::class, 'checkMx'])->name('domains.check-mx');
+
+    Route::get('mailboxes', [MailRecipientController::class, 'index'])->name('mailboxes.index');
+    Route::post('mailboxes', [MailRecipientController::class, 'store'])->name('mailboxes.store');
+    Route::post('mailboxes/bulk', [MailRecipientController::class, 'bulk'])->name('mailboxes.bulk');
+    Route::post('mailboxes/{recipient}/toggle', [MailRecipientController::class, 'toggleFiltering'])->name('mailboxes.toggle');
+    Route::delete('mailboxes/{recipient}', [MailRecipientController::class, 'destroy'])->name('mailboxes.destroy');
+
+    // Quarantine. Release is queued for the holding node, never pushed.
+    Route::get('quarantine', [QuarantineController::class, 'index'])->name('quarantine.index');
+    Route::post('quarantine/bulk', [QuarantineController::class, 'bulk'])->name('quarantine.bulk');
+    Route::get('quarantine/{message}', [QuarantineController::class, 'show'])->name('quarantine.show');
+    Route::post('quarantine/{message}/release', [QuarantineController::class, 'release'])->name('quarantine.release');
+    Route::delete('quarantine/{message}', [QuarantineController::class, 'destroy'])->name('quarantine.destroy');
+
+    Route::get('mail-log', [MailLogController::class, 'index'])->name('mail-log.index');
+    Route::post('mail-log/bulk', [MailLogController::class, 'bulk'])->name('mail-log.bulk');
+
+    // Allow / block rules at mailbox, domain, customer or operator scope.
+    Route::get('rules', [AllowBlockController::class, 'index'])->name('rules.index');
+    Route::post('rules', [AllowBlockController::class, 'store'])->name('rules.store');
+    Route::post('rules/bulk', [AllowBlockController::class, 'bulk'])->name('rules.bulk');
+    Route::delete('rules/{entry}', [AllowBlockController::class, 'destroy'])->name('rules.destroy');
+
+    // Filtering policies.
+    Route::resource('policies', SpamPolicyController::class)->only(['index', 'create', 'store', 'edit', 'update', 'destroy']);
+
+    // MX nodes. Unlimited: enrol as many as you want.
+    Route::resource('nodes', NodeController::class)->only(['index', 'create', 'store', 'show', 'edit', 'update', 'destroy']);
+    Route::post('nodes/{node}/enroll', [NodeController::class, 'enroll'])->name('nodes.enroll');
+    Route::post('nodes/{node}/check-blacklists', [NodeController::class, 'checkBlacklists'])->name('nodes.check-blacklists');
+
+    Route::view('/settings', 'settings.index')->name('settings.index');
+    Route::get('settings/tokens', [ApiTokenController::class, 'index'])->name('settings.tokens.index');
+    Route::post('settings/tokens', [ApiTokenController::class, 'store'])->name('settings.tokens.store');
+    Route::delete('settings/tokens/{apiToken}', [ApiTokenController::class, 'destroy'])->name('settings.tokens.destroy');
+    Route::get('settings/password', [PasswordController::class, 'edit'])->name('settings.password.edit');
+    Route::put('settings/password', [PasswordController::class, 'update'])->name('settings.password.update');
+    Route::get('settings/license', [\App\Http\Controllers\LicenseController::class, 'edit'])->name('settings.license.edit');
+    Route::put('settings/license', [\App\Http\Controllers\LicenseController::class, 'update'])->name('settings.license.update');
+    Route::post('settings/license/sync', [\App\Http\Controllers\LicenseController::class, 'sync'])->name('settings.license.sync');
+    Route::get('settings/branding', [BrandingController::class, 'edit'])->name('settings.branding.edit');
+    Route::put('settings/branding', [BrandingController::class, 'update'])->name('settings.branding.update');
+    Route::get('settings/2fa', [TwoFactorController::class, 'show'])->name('settings.2fa.show');
+    Route::post('settings/2fa/enable', [TwoFactorController::class, 'enable'])->name('settings.2fa.enable');
+    Route::post('settings/2fa/confirm', [TwoFactorController::class, 'confirm'])->name('settings.2fa.confirm');
+    Route::delete('settings/2fa', [TwoFactorController::class, 'disable'])->name('settings.2fa.disable');
+    Route::get('settings/notifications', [NotificationController::class, 'edit'])->name('settings.notifications.edit');
+    Route::put('settings/notifications', [NotificationController::class, 'update'])->name('settings.notifications.update');
+    Route::post('settings/notifications/test', [NotificationController::class, 'test'])->name('settings.notifications.test');
+    Route::get('settings/users', [UserController::class, 'index'])->name('settings.users.index');
+    Route::get('settings/users/create', [UserController::class, 'create'])->name('settings.users.create');
+    Route::post('settings/users', [UserController::class, 'store'])->name('settings.users.store');
+    Route::get('settings/users/{user}/edit', [UserController::class, 'edit'])->name('settings.users.edit');
+    Route::put('settings/users/{user}', [UserController::class, 'update'])->name('settings.users.update');
+    Route::delete('settings/users/{user}', [UserController::class, 'destroy'])->name('settings.users.destroy');
+    Route::get('settings/audit', [AuditLogController::class, 'index'])->name('settings.audit.index');
+    Route::delete('settings/audit/selected', [AuditLogController::class, 'destroySelected'])->name('settings.audit.destroy-selected');
+    Route::delete('settings/audit/all', [AuditLogController::class, 'destroyAll'])->name('settings.audit.destroy-all');
+
+    // General settings (timezone, system info).
+    Route::get('settings/general', [GeneralSettingsController::class, 'edit'])->name('settings.general.edit');
+    Route::put('settings/general', [GeneralSettingsController::class, 'update'])->name('settings.general.update');
+
+    // Firewall (admin-gated in the controller): sessions, IP bans, access limit.
+    Route::get('settings/firewall', [FirewallController::class, 'index'])->name('settings.firewall.index');
+    Route::put('settings/firewall', [FirewallController::class, 'update'])->name('settings.firewall.update');
+    Route::post('settings/firewall/bans', [FirewallController::class, 'ban'])->name('settings.firewall.ban');
+    Route::delete('settings/firewall/bans/{bannedIp}', [FirewallController::class, 'unban'])->name('settings.firewall.unban');
+    Route::delete('settings/firewall/sessions/{id}', [FirewallController::class, 'revokeSession'])->name('settings.firewall.session.revoke');
+    Route::post('settings/firewall/sessions/bulk', [FirewallController::class, 'bulkSessions'])->name('settings.firewall.sessions.bulk');
+    Route::post('settings/firewall/bulk', [FirewallController::class, 'bulk'])->name('settings.firewall.bulk');
+
+    // Host & SSL (admin-gated in the controller): hostname + certificate management.
+    Route::get('settings/host', [HostSslController::class, 'edit'])->name('settings.host.edit');
+    Route::put('settings/host', [HostSslController::class, 'update'])->name('settings.host.update');
+    Route::post('settings/host/letsencrypt', [HostSslController::class, 'letsencrypt'])->name('settings.host.letsencrypt');
+    Route::post('settings/host/upload', [HostSslController::class, 'upload'])->name('settings.host.upload');
+    Route::post('settings/host/self-signed', [HostSslController::class, 'selfSigned'])->name('settings.host.self-signed');
+
+    Route::get('settings/integrations', [\App\Http\Controllers\IntegrationController::class, 'edit'])->name('settings.integrations.edit');
+    Route::put('settings/integrations', [\App\Http\Controllers\IntegrationController::class, 'update'])->name('settings.integrations.update');
+    Route::post('settings/integrations/test', [\App\Http\Controllers\IntegrationController::class, 'test'])->name('settings.integrations.test');
+
+    Route::get('settings/backup', [\App\Http\Controllers\BackupController::class, 'index'])->name('settings.backup.index');
+    Route::get('settings/backup/config', [\App\Http\Controllers\BackupController::class, 'downloadConfig'])->name('settings.backup.config');
+    Route::get('settings/backup/database', [\App\Http\Controllers\BackupController::class, 'downloadDatabase'])->name('settings.backup.database');
+    Route::post('settings/backup/restore', [\App\Http\Controllers\BackupController::class, 'restore'])->name('settings.backup.restore');
+    Route::put('settings/backup/schedule', [\App\Http\Controllers\BackupController::class, 'saveSchedule'])->name('settings.backup.schedule');
+    Route::post('settings/backup/run', [\App\Http\Controllers\BackupController::class, 'runNow'])->name('settings.backup.run');
+
+    Route::get('settings/updates', [\App\Http\Controllers\UpdateController::class, 'show'])->name('settings.updates.show');
+    Route::post('settings/updates/check', [\App\Http\Controllers\UpdateController::class, 'check'])->name('settings.updates.check');
+    Route::post('settings/updates/apply', [\App\Http\Controllers\UpdateController::class, 'apply'])->name('settings.updates.apply');
+    Route::post('settings/updates/auto', [\App\Http\Controllers\UpdateController::class, 'toggleAuto'])->name('settings.updates.auto');
+
+
+    // Storage overview across directors.
+
+    // Placeholders - wired next.
+
+    Route::view('/ui', 'styleguide')->name('styleguide');
+});

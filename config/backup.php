@@ -1,0 +1,23 @@
+<?php
+
+return [
+    // Base directory (on the node that runs the backup) where auto-created
+    // default filesystem repositories are placed, one subfolder per host.
+    // kopia creates the directory; the agent runs as root and chowns it to the
+    // owner of the parent so file managers can see it.
+    'repo_base' => env('BACKUP_REPO_BASE', '/var/backups'),
+
+    // Base directory (on the Director's gateway) where "ingest" connections drop
+    // pushed files, one subfolder per connection. The gateway agent's receive
+    // (SFTP) server is rooted here per connection; a scheduled job snapshots it.
+    'ingest_base' => env('BACKUP_INGEST_BASE', '/var/backups/ingest'),
+
+    // Passive data-port range the gateway's FTP receive server allocates from
+    // for PASV transfers. Open this range (plus each FTP connection's control
+    // port) inbound on the gateway's firewall.
+    'ingest_ftp_pasv_min' => (int) env('BACKUP_INGEST_FTP_PASV_MIN', 30000),
+    'ingest_ftp_pasv_max' => (int) env('BACKUP_INGEST_FTP_PASV_MAX', 30100),
+
+    // Read-only public demo. Auto-signs-in a demo user and blocks every write.
+    'demo' => (bool) env('DEMO_MODE', false),
+];

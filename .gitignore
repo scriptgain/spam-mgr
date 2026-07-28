@@ -1,0 +1,45 @@
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.env.backup
+.env.production
+.phpactor.json
+.phpunit.result.cache
+/.codex
+/.cursor/
+/.idea
+/.nova
+/.phpunit.cache
+/.vscode
+/.zed
+/auth.json
+/node_modules
+/public/build
+/public/fonts-manifest.dev.json
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/vendor
+_ide_helper.php
+Homestead.json
+Homestead.yaml
+Thumbs.db
+
+# build artifacts / binaries — kept on server001, never in the repo
+/agent/bin/
+/dist/
+/public/downloads/
+/public/agent/
+*.pem
+*.crt
+*.bak
+*.bak-*
+
+# The GuardMGR scan agent (Go source) lives in this repo under /agent; only its
+# built binaries (/agent/bin, ignored above) stay out.
+
+# Go guard agent now lives in the private scriptgain/guard-agent repo.
+/agent/
